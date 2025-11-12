@@ -138,6 +138,80 @@ function App() {
     fetch(`${API_BASE}/api/tutorials`).then(r => r.json()).then(setTutorials).catch(() => {})
   }, [])
 
+  // Inventory module state
+  const [movement, setMovement] = useState({
+    type: 'in',
+    ingredient_id: '',
+    lot_code: '',
+    qty_kg: 1,
+    expiry_date: '',
+    cost_per_kg: '',
+    supplier: '',
+    reason: 'purchase',
+    note: '',
+  })
+  const [inventory, setInventory] = useState([])
+  const [expiring, setExpiring] = useState([])
+
+  const fetchInventory = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/inventory/items`)
+      const data = await r.json()
+      setInventory(Array.isArray(data) ? data : [])
+    } catch {}
+  }
+  const fetchExpiring = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/inventory/expiring?days=14`)
+      const data = await r.json()
+      setExpiring(Array.isArray(data) ? data : [])
+    } catch {}
+  }
+
+  useEffect(() => {
+    fetchInventory()
+    fetchExpiring()
+  }, [])
+
+  useEffect(() => {
+    // default ingredient selection
+    if (!movement.ingredient_id && ingredients.length) {
+      setMovement(m => ({ ...m, ingredient_id: ingredients[0].id || ingredients[0]._id }))
+    }
+  }, [ingredients])
+
+  const submitMovement = async () => {
+    if (!movement.ingredient_id || !movement.lot_code || !movement.qty_kg) {
+      setMessage('Compila ingrediente, lotto e quantità')
+      return
+    }
+    setLoading(true)
+    setMessage('')
+    try {
+      const payload = {
+        ...movement,
+        qty_kg: Number(movement.qty_kg),
+        cost_per_kg: movement.cost_per_kg === '' ? undefined : Number(movement.cost_per_kg),
+        expiry_date: movement.expiry_date ? new Date(movement.expiry_date).toISOString() : undefined,
+      }
+      const res = await fetch(`${API_BASE}/api/inventory/movements`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.detail || 'Errore movimento inventario')
+      setMessage('Movimento registrato')
+      setMovement(m => ({ ...m, qty_kg: 1, note: '' }))
+      await fetchInventory()
+      await fetchExpiring()
+    } catch (e) {
+      setMessage(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-white to-sky-50">
       <header className="sticky top-0 z-10 backdrop-blur bg-white/70 border-b border-gray-100">
@@ -202,7 +276,7 @@ function App() {
                 </div>
               ))}
             </div>
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <button onClick={saveRecipe} disabled={loading} className="btn-primary">Salva & Calcola</button>
               <a className="btn-ghost" href={`${API_BASE}/api/export/recipes.csv`} target="_blank" rel="noreferrer">Export Ricette CSV</a>
               <a className="btn-ghost" href={`${API_BASE}/api/export/labels.csv`} target="_blank" rel="noreferrer">Export Etichette CSV</a>
@@ -214,6 +288,76 @@ function App() {
                 ))}
               </div>
             )}
+          </Section>
+
+          <Section title="Magazzino ingredienti (avanzato)" actions={
+            <div className="flex gap-2">
+              <a className="btn-ghost" href={`${API_BASE}/api/export/inventory.csv`} target="_blank" rel="noreferrer">Export CSV</a>
+              <a className="btn-ghost" href={`${API_BASE}/api/export/movements.csv`} target="_blank" rel="noreferrer">Movimenti CSV</a>
+              <a className="btn-ghost" href={`${API_BASE}/api/export/inventory.pdf`} target="_blank" rel="noreferrer">Export PDF</a>
+            </div>
+          }>
+            <div className="grid md:grid-cols-6 gap-3">
+              <select className="input md:col-span-2" value={movement.ingredient_id} onChange={e=>setMovement(m=>({...m, ingredient_id: e.target.value}))}>
+                {ingredients.map(i => (
+                  <option key={i.id || i._id} value={i.id || i._id}>{i.name}</option>
+                ))}
+              </select>
+              <input className="input" placeholder="Lotto" value={movement.lot_code} onChange={e=>setMovement(m=>({...m, lot_code: e.target.value}))} />
+              <input className="input" type="number" step="0.001" placeholder="Qta kg" value={movement.qty_kg} onChange={e=>setMovement(m=>({...m, qty_kg: e.target.value}))} />
+              <select className="input" value={movement.type} onChange={e=>setMovement(m=>({...m, type: e.target.value}))}>
+                <option value="in">Carico</option>
+                <option value="out">Scarico</option>
+              </select>
+              <input className="input" type="date" value={movement.expiry_date} onChange={e=>setMovement(m=>({...m, expiry_date: e.target.value}))} />
+              <input className="input" type="number" step="0.01" placeholder="Costo/kg" value={movement.cost_per_kg} onChange={e=>setMovement(m=>({...m, cost_per_kg: e.target.value}))} />
+              <input className="input" placeholder="Fornitore" value={movement.supplier} onChange={e=>setMovement(m=>({...m, supplier: e.target.value}))} />
+              <input className="input md:col-span-3" placeholder="Motivo (acquisto, produzione, scarto, correzione)" value={movement.reason} onChange={e=>setMovement(m=>({...m, reason: e.target.value}))} />
+              <input className="input md:col-span-6" placeholder="Nota" value={movement.note} onChange={e=>setMovement(m=>({...m, note: e.target.value}))} />
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button className="btn-primary" disabled={loading} onClick={submitMovement}>Registra movimento</button>
+              <button className="btn-secondary" onClick={()=>{fetchInventory(); fetchExpiring();}}>Aggiorna</button>
+            </div>
+
+            <div className="mt-5 grid md:grid-cols-2 gap-5">
+              <div>
+                <div className="text-sm font-medium mb-2">Giacenze per lotto</div>
+                <div className="max-h-72 overflow-auto border rounded-lg divide-y">
+                  {inventory.map(it => (
+                    <div key={it.id} className="p-3 text-sm flex items-center justify-between">
+                      <div>
+                        <div className="font-medium">{it.ingredient_name || it.ingredient_id}</div>
+                        <div className="text-gray-500">Lotto {it.lot_code || '-'} · Scadenza {it.expiry_date ? new Date(it.expiry_date).toLocaleDateString() : '-'} · Stato {it.status}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold">{it.qty_kg} kg</div>
+                        <div className="text-gray-500 text-xs">{it.supplier || ''}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {!inventory.length && <div className="p-4 text-sm text-gray-500">Nessuna giacenza</div>}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-medium mb-2">In scadenza (14 giorni)</div>
+                <div className="max-h-72 overflow-auto border rounded-lg divide-y">
+                  {expiring.map((it, idx) => (
+                    <div key={it.id || idx} className="p-3 text-sm flex items-center justify-between">
+                      <div>
+                        <div className="font-medium">{it.ingredient_id}</div>
+                        <div className="text-gray-500">Lotto {it.lot_code || '-'} · Scadenza {it.expiry_date ? new Date(it.expiry_date).toLocaleDateString() : '-'}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold">{Number(it.qty_kg || it.qty || 0).toFixed(3)} kg</div>
+                      </div>
+                    </div>
+                  ))}
+                  {!expiring.length && <div className="p-4 text-sm text-gray-500">Nessun prodotto in scadenza</div>}
+                </div>
+              </div>
+            </div>
           </Section>
         </div>
 
